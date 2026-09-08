@@ -16,6 +16,9 @@ jobs:
           flutter-version: '3.19.x'
           channel: 'stable'
 
+      - name: Create Android files
+        run: flutter create . --platforms=android --org com.deriv.trader
+
       - run: flutter pub get
       - run: flutter build apk --release
 
