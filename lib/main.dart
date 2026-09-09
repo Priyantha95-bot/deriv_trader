@@ -12,7 +12,7 @@ class DerivProTraderApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Deriv Pro Trader',
+      title: 'Deriv Pro Advanced Trader & Bot',
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0F1015),
         primaryColor: Colors.blueAccent,
@@ -31,37 +31,68 @@ class ProTraderDashboard extends StatefulWidget {
 
 class _ProTraderDashboardState extends State<ProTraderDashboard> {
   // Deriv WebSocket Connection
-  final _channel = WebSocketChannel.connect(
-    Uri.parse('wss://ws.derivws.com/websockets/v3?app_id=1089'),
-  );
+  late WebSocketChannel _channel;
 
   bool _isAutoMode = false;
-  String _selectedSymbol = 'R_75';
-  String _selectedContract = 'CALL';
-  double _stake = 10.0;
-  int _duration = 5;
+  bool _isBotRunning = false;
+  String _selectedMarket = 'R_75'; // Default: Volatility 75 Index
+  
+  // Customizable Settings Controllers & Variables
+  String _selectedContract = 'DIGITMATCH';
+  double _baseStake = 1.0;
+  double _currentStake = 1.0;
+  int _duration = 1;
+  int _barrier = 5;
   double _takeProfit = 50.0;
   double _stopLoss = 20.0;
-  
+  double _martingaleMultiplier = 2.0; 
+  double _totalProfitLoss = 0.0;
+
   String _price = 'Connecting...';
-  String _statusMessage = 'Please enter API Token in Settings';
+  String _statusMessage = 'Please enter your API Token in Settings (⚙️)';
   bool _isAuthorized = false;
   
+  // Last Digit Analysis Statistics (0 to 9)
+  final Map<int, int> _digitCounts = {0:0, 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0};
+  int _totalTicks = 0;
+
   final TextEditingController _tokenController = TextEditingController();
 
-  final Map<String, String> _symbols = {
+  final Map<String, String> _markets = {
     'Volatility 75 Index': 'R_75',
     'Volatility 10 Index': 'R_10',
+    'Volatility 25 Index': 'R_25',
     'Volatility 50 Index': 'R_50',
     'Volatility 100 Index': 'R_100',
+    'Boom 1000': 'BOOM1000',
+    'Crash 1000': 'CRASH1000',
+    'Forex - EUR/USD': 'frxEURUSD',
+    'Forex - GBP/USD': 'frxGBPUSD',
+  };
+
+  final Map<String, String> _contracts = {
+    'Rise / Fall': 'CALL',
+    'Even / Odd (Even)': 'DIGITEVEN',
+    'Over / Under': 'DIGITOVER',
+    'Matches / Differs': 'DIGITMATCH',
   };
 
   @override
   void initState() {
     super.initState();
+    _currentStake = _baseStake;
+    _initWebSocket();
+  }
+
+  void _initWebSocket() {
+    _channel = WebSocketChannel.connect(
+      Uri.parse('wss://ws.derivws.com/websockets/v3?app_id=1089'),
+    );
+
     _channel.stream.listen((message) {
       final data = jsonDecode(message);
       
+      // Authorization Response
       if (data['msg_type'] == 'authorize') {
         if (data['error'] != null) {
           setState(() {
@@ -70,75 +101,124 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
           });
         } else {
           setState(() {
-            _statusMessage = 'Connected: ${data['authorize']['email']}';
+            _statusMessage = 'Authorized: ${data['authorize']['email']} (Balance: ${data['authorize']['balance']} USD)';
             _isAuthorized = true;
           });
         }
       }
 
+      // Live Ticks & Last Digit Analysis + Bot Strategy Execution
       if (data['msg_type'] == 'tick') {
-        if (data['tick'] != null && data['tick']['symbol'] == _selectedSymbol) {
+        if (data['tick'] != null && data['tick']['symbol'] == _selectedMarket) {
+          final quote = data['tick']['quote'].toString();
           setState(() {
-            _price = data['tick']['quote'].toString();
+            _price = quote;
           });
+
+          // Extract last digit for LDP Analysis
+          if (quote.contains('.')) {
+            String lastChar = quote.split('.').last;
+            if (lastChar.isNotEmpty) {
+              int lastDigit = int.parse(lastChar[lastChar.length - 1]);
+              setState(() {
+                _digitCounts[lastDigit] = (_digitCounts[lastDigit] ?? 0) + 1;
+                _totalTicks++;
+              });
+
+              // IF AUTOMATED BOT IS RUNNING, EXECUTE DYNAMIC STRATEGY ON TICK
+              if (_isAutoMode && _isBotRunning && _isAuthorized) {
+                _evaluateBotStrategy(lastDigit);
+              }
+            }
+          }
         }
       }
 
+      // Trade Execution & Response Handling
       if (data['msg_type'] == 'buy') {
         if (data['error'] != null) {
           setState(() {
-            _statusMessage = 'Trade Failed: ${data['error']['message']}';
+            _statusMessage = 'Bot/Trade Error: ${data['error']['message']}';
           });
         } else {
           setState(() {
-            _statusMessage = 'Order Successful! ID: ${data['buy']['contract_id']}';
+            _statusMessage = 'Trade Placed! ID: ${data['buy']['contract_id']} (Stake: \$$_currentStake)';
           });
         }
       }
     });
 
-    // Subscribe to default market
-    _subscribeMarket(_selectedSymbol);
+    _subscribeMarket(_selectedMarket);
   }
 
   void _subscribeMarket(String symbol) {
-    _channel.sink.add(jsonEncode({"forget_all": "ticks"}));
-    _channel.sink.add(jsonEncode({"ticks": symbol}));
+    setState(() {
+      _digitCounts.updateAll((key, value) => 0);
+      _totalTicks = 0;
+      _price = 'Loading...';
+    });
+    try {
+      _channel.sink.add(jsonEncode({"forget_all": "ticks"}));
+      _channel.sink.add(jsonEncode({"ticks": symbol}));
+    } catch (e) {
+      // Handle connection sync if needed
+    }
   }
 
   void _authorizeUser(String token) {
     if (token.isEmpty) return;
     setState(() {
-      _statusMessage = 'Authorizing...';
+      _statusMessage = 'Authorizing with Deriv API...';
     });
     _channel.sink.add(jsonEncode({"authorize": token}));
   }
 
-  void _executeTrade() {
+  void _evaluateBotStrategy(int lastDigit) {
+    if (_totalTicks % 5 == 0) { 
+      _executeAutomatedTrade();
+    }
+  }
+
+  void _executeManualTrade() {
     if (!_isAuthorized) {
+      setState(() => _statusMessage = 'Error: Please add API Token in settings first!');
+      return;
+    }
+    _sendBuyRequest(_baseStake);
+  }
+
+  void _executeAutomatedTrade() {
+    if (_totalProfitLoss >= _takeProfit || _totalProfitLoss <= -_stopLoss) {
       setState(() {
-        _statusMessage = 'Error: Authorize with API Token first!';
+        _isBotRunning = false;
+        _statusMessage = 'Bot Stopped: Profit/Loss limit reached! P/L: \$$_totalProfitLoss';
       });
       return;
     }
+    _sendBuyRequest(_currentStake);
+  }
 
-    setState(() {
-      _statusMessage = 'Executing $_selectedContract order...';
-    });
+  void _sendBuyRequest(double stakeAmount) {
+    Map<String, dynamic> parameters = {
+      "amount": stakeAmount,
+      "basis": "stake",
+      "currency": "USD",
+      "symbol": _selectedMarket,
+      "duration": _duration,
+      "duration_unit": "t",
+      "contract_type": _selectedContract,
+    };
+
+    if (_selectedContract == 'DIGITOVER' || _selectedContract == 'DIGITUNDER' || _selectedContract == 'DIGITMATCH') {
+      parameters["barrier"] = _barrier.toString();
+    }
 
     final tradeRequest = {
       "buy": 1,
-      "price": _stake,
-      "parameters": {
-        "amount": _stake,
-        "basis": "stake",
-        "currency": "USD",
-        "symbol": _selectedSymbol,
-        "duration": _duration,
-        "duration_unit": "t",
-        "contract_type": _selectedContract
-      }
+      "price": stakeAmount,
+      "parameters": parameters,
     };
+
     _channel.sink.add(jsonEncode(tradeRequest));
   }
 
@@ -147,18 +227,15 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF161822),
-        title: const Text('Deriv Account Settings'),
+        title: const Text('Deriv API Settings'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Enter your Deriv API Token to enable live trading:', style: TextStyle(fontSize: 13, color: Colors.grey)),
+            const Text('Enter your Deriv API Token:', style: TextStyle(fontSize: 13, color: Colors.grey)),
             const SizedBox(height: 10),
             TextField(
               controller: _tokenController,
-              decoration: const InputDecoration(
-                hintText: 'API Token',
-                border: OutlineInputBorder(),
-              ),
+              decoration: const InputDecoration(hintText: 'API Token', border: OutlineInputBorder()),
             ),
           ],
         ),
@@ -186,7 +263,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('DERIV PRO TRADER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        title: const Text('DERIV PRO DYNAMIC TRADER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
         backgroundColor: const Color(0xFF1F222E),
         actions: [
           IconButton(
@@ -196,13 +273,13 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(12.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Mode Switcher (Manual / Automated Bot)
+            // Mode Switcher (Manual vs Pro Bot)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               decoration: BoxDecoration(
                 color: const Color(0xFF1F222E),
                 borderRadius: BorderRadius.circular(10),
@@ -211,7 +288,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    _isAutoMode ? 'Mode: AUTOMATED BOT' : 'Mode: MANUAL TRADING',
+                    _isAutoMode ? 'Mode: DYNAMIC BOT' : 'Mode: MANUAL TRADING',
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: _isAutoMode ? Colors.purpleAccent : Colors.greenAccent,
@@ -223,193 +300,274 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                     onChanged: (val) {
                       setState(() {
                         _isAutoMode = val;
+                        _isBotRunning = false;
                       });
                     },
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 15),
+            const SizedBox(height: 12),
 
-            // Market Selector Dropdown
-            const Text('Select Market:', style: TextStyle(color: Colors.grey, fontSize: 13)),
-            const SizedBox(height: 5),
+            // Market Selector Card (Fully Dynamic & Instant Switch)
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: const Color(0xFF1F222E),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: DropdownButton<String>(
-                value: _selectedSymbol,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF1F222E),
-                underline: const SizedBox(),
-                items: _symbols.keys.map((String name) {
-                  return DropdownMenuItem<String>(
-                    value: _symbols[name],
-                    child: Text(name),
-                  );
-                }).toList(),
-                onChanged: (String? newValue) {
-                  if (newValue != null) {
-                    setState(() {
-                      _selectedSymbol = newValue;
-                      _price = 'Loading...';
-                    });
-                    _subscribeMarket(newValue);
-                  }
-                },
-              ),
-            ),
-            const SizedBox(height: 15),
-
-            // Live Price Display Card
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF161822),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey.withOpacity(0.2)),
+                border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Live Market Price:', style: TextStyle(fontSize: 16)),
-                  Text(
-                    _price,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.greenAccent,
-                    ),
+                  const Text('Select Trading Market / Asset:', style: TextStyle(color: Colors.blueAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  DropdownButton<String>(
+                    value: _selectedMarket,
+                    isExpanded: true,
+                    dropdownColor: const Color(0xFF1F222E),
+                    underline: const SizedBox(),
+                    items: _markets.keys.map((String name) {
+                      return DropdownMenuItem<String>(
+                        value: _markets[name],
+                        child: Text(name, style: const TextStyle(fontWeight: FontWeight.w500)),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      if (newValue != null) {
+                        setState(() {
+                          _selectedMarket = newValue;
+                        });
+                        _subscribeMarket(newValue);
+                      }
+                    },
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 15),
+            const SizedBox(height: 12),
 
-            // Status Message Bar
+            // Live Price Display
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF161822),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Live LDP Price:', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  Text(_price, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.greenAccent)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Last Digit Analysis (0 - 9 Percentages)
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1F222E),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Last Digit Stats (Total Ticks: $_totalTicks)', style: const TextStyle(fontSize: 12, color: Colors.amber, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: List.generate(10, (index) {
+                      int count = _digitCounts[index] ?? 0;
+                      double percentage = _totalTicks > 0 ? (count / _totalTicks) * 100 : 0.0;
+                      return Column(
+                        children: [
+                          Text('$index', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 2),
+                          Text('${percentage.toStringAsFixed(0)}%', style: TextStyle(fontSize: 10, color: percentage > 11 ? Colors.greenAccent : Colors.grey)),
+                        ],
+                      );
+                    }),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Status Message Box
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: _isAuthorized ? Colors.green.withOpacity(0.1) : Colors.amber.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _statusMessage,
-                style: TextStyle(
-                  color: _isAuthorized ? Colors.greenAccent : Colors.amber,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: TextStyle(color: _isAuthorized ? Colors.greenAccent : Colors.amber, fontSize: 12),
                 textAlign: TextAlign.center,
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 12),
 
+            // Dynamic Configurable Controls based on Mode
             if (!_isAutoMode) ...[
-              // MANUAL TRADING CONTROLS
-              const Text('Contract Type:', style: TextStyle(color: Colors.grey, fontSize: 13)),
-              const SizedBox(height: 5),
+              // FULLY CONFIGURABLE MANUAL CONTROLS
+              const Text('Contract Type:', style: TextStyle(color: Colors.grey, fontSize: 12)),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(color: const Color(0xFF1F222E), borderRadius: BorderRadius.circular(8)),
+                child: DropdownButton<String>(
+                  value: _selectedContract,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF1F222E),
+                  underline: const SizedBox(),
+                  items: _contracts.keys.map((String name) {
+                    return DropdownMenuItem<String>(
+                      value: _contracts[name],
+                      child: Text(name),
+                    );
+                  }).toList(),
+                  onChanged: (String? val) => setState(() => _selectedContract = val!),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _selectedContract == 'CALL' ? Colors.green : Colors.grey[800],
-                      ),
-                      onPressed: () => setState(() => _selectedContract = 'CALL'),
-                      child: const Text('HIGHER / CALL'),
+                    child: TextFormField(
+                      initialValue: _baseStake.toString(),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Stake ($)', border: OutlineInputBorder()),
+                      onChanged: (val) => _baseStake = double.tryParse(val) ?? 1.0,
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _selectedContract == 'PUT' ? Colors.red : Colors.grey[800],
-                      ),
-                      onPressed: () => setState(() => _selectedContract = 'PUT'),
-                      child: const Text('LOWER / PUT'),
+                    child: TextFormField(
+                      initialValue: _duration.toString(),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Ticks Duration', border: OutlineInputBorder()),
+                      onChanged: (val) => _duration = int.tryParse(val) ?? 1,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 15),
-
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Stake ($)', border: OutlineInputBorder()),
-                      controller: TextEditingController(text: _stake.toString()),
-                      onChanged: (val) => _stake = double.tryParse(val) ?? 10.0,
-                    ),
-                  ),
-                  const SizedBox(width: 15),
-                  Expanded(
-                    child: TextField(
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Duration (Ticks)', border: OutlineInputBorder()),
-                      controller: TextEditingController(text: _duration.toString()),
-                      onChanged: (val) => _duration = int.tryParse(val) ?? 5,
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 10),
+              TextFormField(
+                initialValue: _barrier.toString(),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Barrier / Prediction Digit (0-9)', border: OutlineInputBorder()),
+                onChanged: (val) => _barrier = int.tryParse(val) ?? 5,
               ),
-              const SizedBox(height: 20),
-
+              const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                  ),
-                  onPressed: _executeTrade,
-                  child: Text('PLACE ${_selectedContract} ORDER', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, padding: const EdgeInsets.symmetric(vertical: 14)),
+                  onPressed: _executeManualTrade,
+                  child: const Text('EXECUTE MANUAL TRADE', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
                 ),
               ),
             ] else ...[
-              // AUTOMATED BOT SETTINGS
-              const Text('Automated Bot Parameters:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.purpleAccent)),
-              const SizedBox(height: 15),
+              // FULLY CONFIGURABLE AUTOMATED BOT CONTROLS
+              const Text('Bot Strategy & Risk Management Parameters', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.purpleAccent)),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(color: const Color(0xFF1F222E), borderRadius: BorderRadius.circular(8)),
+                child: DropdownButton<String>(
+                  value: _selectedContract,
+                  isExpanded: true,
+                  dropdownColor: const Color(0xFF1F222E),
+                  underline: const SizedBox(),
+                  items: _contracts.keys.map((String name) {
+                    return DropdownMenuItem<String>(
+                      value: _contracts[name],
+                      child: Text(name),
+                    );
+                  }).toList(),
+                  onChanged: (String? val) => setState(() => _selectedContract = val!),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
-                    child: TextField(
+                    child: TextFormField(
+                      initialValue: _baseStake.toString(),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Base Stake ($)', border: OutlineInputBorder()),
+                      onChanged: (val) => _baseStake = double.tryParse(val) ?? 1.0,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _barrier.toString(),
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Target Barrier', border: OutlineInputBorder()),
+                      onChanged: (val) => _barrier = int.tryParse(val) ?? 5,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: _takeProfit.toString(),
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'Take Profit ($)', border: OutlineInputBorder()),
-                      controller: TextEditingController(text: _takeProfit.toString()),
                       onChanged: (val) => _takeProfit = double.tryParse(val) ?? 50.0,
                     ),
                   ),
-                  const SizedBox(width: 15),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: TextField(
+                    child: TextFormField(
+                      initialValue: _stopLoss.toString(),
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(labelText: 'Stop Loss ($)', border: OutlineInputBorder()),
-                      controller: TextEditingController(text: _stopLoss.toString()),
                       onChanged: (val) => _stopLoss = double.tryParse(val) ?? 20.0,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 10),
+              TextFormField(
+                initialValue: _martingaleMultiplier.toString(),
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Martingale Multiplier', border: OutlineInputBorder()),
+                onChanged: (val) => _martingaleMultiplier = double.tryParse(val) ?? 2.0,
+              ),
+              const SizedBox(height: 15),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    backgroundColor: _isBotRunning ? Colors.red : Colors.purple,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   onPressed: () {
                     setState(() {
-                      _statusMessage = 'Bot Engine Started (Demo/Live mode active)';
+                      _isBotRunning = !_isBotRunning;
+                      if (_isBotRunning) {
+                        _currentStake = _baseStake;
+                        _totalProfitLoss = 0.0;
+                        _statusMessage = 'Dynamic Bot Started Successfully...';
+                      } else {
+                        _statusMessage = 'Dynamic Bot Stopped by User.';
+                      }
                     });
                   },
-                  child: const Text('START TRADING BOT', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  child: Text(
+                    _isBotRunning ? 'STOP AUTOMATED BOT' : 'START AUTOMATED BOT',
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
                 ),
               ),
             ],
