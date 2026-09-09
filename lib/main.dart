@@ -30,14 +30,12 @@ class ProTraderDashboard extends StatefulWidget {
 }
 
 class _ProTraderDashboardState extends State<ProTraderDashboard> {
-  // Deriv WebSocket Connection
   late WebSocketChannel _channel;
 
   bool _isAutoMode = false;
   bool _isBotRunning = false;
-  String _selectedMarket = 'R_75'; // Default: Volatility 75 Index
+  String _selectedMarket = 'R_75'; 
   
-  // Customizable Settings Controllers & Variables
   String _selectedContract = 'DIGITMATCH';
   double _baseStake = 1.0;
   double _currentStake = 1.0;
@@ -52,7 +50,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
   String _statusMessage = 'Please enter your API Token in Settings (⚙️)';
   bool _isAuthorized = false;
   
-  // Last Digit Analysis Statistics (0 to 9)
   final Map<int, int> _digitCounts = {0:0, 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0};
   int _totalTicks = 0;
 
@@ -92,7 +89,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
     _channel.stream.listen((message) {
       final data = jsonDecode(message);
       
-      // Authorization Response
       if (data['msg_type'] == 'authorize') {
         if (data['error'] != null) {
           setState(() {
@@ -107,7 +103,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
         }
       }
 
-      // Live Ticks & Last Digit Analysis + Bot Strategy Execution
       if (data['msg_type'] == 'tick') {
         if (data['tick'] != null && data['tick']['symbol'] == _selectedMarket) {
           final quote = data['tick']['quote'].toString();
@@ -115,7 +110,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
             _price = quote;
           });
 
-          // Extract last digit for LDP Analysis
           if (quote.contains('.')) {
             String lastChar = quote.split('.').last;
             if (lastChar.isNotEmpty) {
@@ -125,7 +119,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                 _totalTicks++;
               });
 
-              // IF AUTOMATED BOT IS RUNNING, EXECUTE DYNAMIC STRATEGY ON TICK
               if (_isAutoMode && _isBotRunning && _isAuthorized) {
                 _evaluateBotStrategy(lastDigit);
               }
@@ -134,7 +127,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
         }
       }
 
-      // Trade Execution & Response Handling
       if (data['msg_type'] == 'buy') {
         if (data['error'] != null) {
           setState(() {
@@ -277,7 +269,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Mode Switcher (Manual vs Pro Bot)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               decoration: BoxDecoration(
@@ -309,7 +300,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
             ),
             const SizedBox(height: 12),
 
-            // Market Selector Card (Fully Dynamic & Instant Switch)
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -347,7 +337,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
             ),
             const SizedBox(height: 12),
 
-            // Live Price Display
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -365,7 +354,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
             ),
             const SizedBox(height: 10),
 
-            // Last Digit Analysis (0 - 9 Percentages)
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -396,7 +384,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
             ),
             const SizedBox(height: 10),
 
-            // Status Message Box
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(8),
@@ -412,9 +399,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
             ),
             const SizedBox(height: 12),
 
-            // Dynamic Configurable Controls based on Mode
             if (!_isAutoMode) ...[
-              // FULLY CONFIGURABLE MANUAL CONTROLS
               const Text('Contract Type:', style: TextStyle(color: Colors.grey, fontSize: 12)),
               const SizedBox(height: 4),
               Container(
@@ -441,7 +426,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                     child: TextFormField(
                       initialValue: _baseStake.toString(),
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Stake ($)', border: OutlineInputBorder()),
+                      decoration: const InputDecoration(labelText: 'Stake (\$)', border: OutlineInputBorder()),
                       onChanged: (val) => _baseStake = double.tryParse(val) ?? 1.0,
                     ),
                   ),
@@ -473,7 +458,6 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                 ),
               ),
             ] else ...[
-              // FULLY CONFIGURABLE AUTOMATED BOT CONTROLS
               const Text('Bot Strategy & Risk Management Parameters', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.purpleAccent)),
               const SizedBox(height: 10),
               Container(
@@ -500,7 +484,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                     child: TextFormField(
                       initialValue: _baseStake.toString(),
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Base Stake ($)', border: OutlineInputBorder()),
+                      decoration: const InputDecoration(labelText: 'Base Stake (\$)', border: OutlineInputBorder()),
                       onChanged: (val) => _baseStake = double.tryParse(val) ?? 1.0,
                     ),
                   ),
@@ -522,7 +506,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                     child: TextFormField(
                       initialValue: _takeProfit.toString(),
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Take Profit ($)', border: OutlineInputBorder()),
+                      decoration: const InputDecoration(labelText: 'Take Profit (\$)', border: OutlineInputBorder()),
                       onChanged: (val) => _takeProfit = double.tryParse(val) ?? 50.0,
                     ),
                   ),
@@ -531,7 +515,7 @@ class _ProTraderDashboardState extends State<ProTraderDashboard> {
                     child: TextFormField(
                       initialValue: _stopLoss.toString(),
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Stop Loss ($)', border: OutlineInputBorder()),
+                      decoration: const InputDecoration(labelText: 'Stop Loss (\$)', border: OutlineInputBorder()),
                       onChanged: (val) => _stopLoss = double.tryParse(val) ?? 20.0,
                     ),
                   ),
